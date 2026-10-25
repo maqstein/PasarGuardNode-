@@ -113,6 +113,12 @@ func (wg *WireGuard) ensureRunningWithManagerLocked() error {
 
 // New creates a new WireGuard backend instance
 func New(cfg *config.Config, wgConfig *Config, users []*common.User) (*WireGuard, error) {
+	if wgConfig != nil && wgConfig.Amnezia != nil {
+		amnezia := wgConfig.Amnezia
+		return newWithManagerFactory(cfg, wgConfig, users, func(interfaceName string) (*Manager, error) {
+			return NewAmneziaManager(interfaceName, amnezia)
+		})
+	}
 	return newWithManagerFactory(cfg, wgConfig, users, NewManager)
 }
 
@@ -126,7 +132,12 @@ func newWithManagerFactory(cfg *config.Config, wgConfig *Config, users []*common
 	wgCtx, wgCancel := context.WithCancel(context.Background())
 
 	// Get WireGuard version before starting
-	version := getWireGuardVersion()
+	var version string
+	if wgConfig != nil && wgConfig.Amnezia != nil {
+		version = amneziaVersion()
+	} else {
+		version = getWireGuardVersion()
+	}
 
 	wg := &WireGuard{
 		cancelFunc:     wgCancel,

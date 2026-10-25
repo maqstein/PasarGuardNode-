@@ -9,6 +9,10 @@ services:
       - NET_ADMIN
     # WireGuard in this image uses the Linux kernel interface.
     # The host must have WireGuard kernel support available (for example: modprobe wireguard).
+    # AmneziaWG cores (an "amnezia" block in the core config) run in userspace on a TUN
+    # device instead, and need no kernel module.
+    devices:
+      - /dev/net/tun:/dev/net/tun
 
     environment:
       SERVICE_PORT: 62050

@@ -20,6 +20,8 @@ type Config struct {
 	MTU           *int           `json:"mtu,omitempty"`
 	Address       []string       `json:"address"`
 	Latency       *LatencyConfig `json:"latency,omitempty"`
+	// Amnezia turns the interface into an AmneziaWG one when present, even when empty.
+	Amnezia *AmneziaConfig `json:"amnezia,omitempty"`
 
 	privateKeyValue   wgtypes.Key
 	privateKeySet     bool
@@ -63,6 +65,9 @@ func NewConfig(config string) (*Config, error) {
 
 	// Validate configuration
 	if err := validateMTU(wgConfig.MTU); err != nil {
+		return nil, err
+	}
+	if err := wgConfig.Amnezia.Validate(); err != nil {
 		return nil, err
 	}
 	if wgConfig.InterfaceName == "" {

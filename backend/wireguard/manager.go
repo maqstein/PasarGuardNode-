@@ -72,9 +72,21 @@ func wrapPermissionDeniedError(action string, err error) error {
 	return err
 }
 
+// tunnel creates the interface in-process instead of as a kernel WireGuard link.
+// The AmneziaWG backend implements it: its device is both the tunnel and the wgClient.
+type tunnel interface {
+	// create adds the interface.
+	create(name string) error
+	// start runs once the interface is up and reports a failure to bind the listen port.
+	start() error
+	// destroy releases what create made. It is safe to call when nothing was created.
+	destroy()
+}
+
 // Manager handles WireGuard interface management using wgctrl
 type Manager struct {
 	client     wgClient
+	tunnel     tunnel
 	iFaceName  string
 	nl         netlinkOps
 	configure  configureDeviceFunc
@@ -162,9 +174,8 @@ func (m *Manager) initializeWithPeers(privateKey wgtypes.Key, listenPort int, se
 	}
 
 	// Create WireGuard interface
-	link := &netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: m.iFaceName}}
-	if err := nl.LinkAdd(link); err != nil {
-		return fmt.Errorf("failed to add link: %w", wrapPermissionDeniedError("creating wireguard interface", err))
+	if err := m.addLink(nl); err != nil {
+		return fmt.Errorf("failed to add link: %w", err)
 	}
 	cleanupOnError := true
 	defer func() {
@@ -205,8 +216,22 @@ func (m *Manager) initializeWithPeers(privateKey wgtypes.Key, listenPort int, se
 		return fmt.Errorf("failed to bring up interface: %w", wrapPermissionDeniedError("bringing wireguard interface up", err))
 	}
 
+	if m.tunnel != nil {
+		if err := m.tunnel.start(); err != nil {
+			return fmt.Errorf("failed to start interface: %w", err)
+		}
+	}
+
 	cleanupOnError = false
 	return nil
+}
+
+func (m *Manager) addLink(nl netlinkOps) error {
+	if m.tunnel != nil {
+		return m.tunnel.create(m.iFaceName)
+	}
+	link := &netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: m.iFaceName}}
+	return wrapPermissionDeniedError("creating wireguard interface", nl.LinkAdd(link))
 }
 
 // ApplyPeers applies a batch of peer configurations in a single kernel call.
@@ -335,6 +360,12 @@ func (m *Manager) Close() error {
 
 // cleanupExistingInterface removes existing interface if it exists
 func (m *Manager) cleanupExistingInterface() error {
+	if m.tunnel != nil {
+		// Closing the in-process device removes its interface; the lookup below
+		// then only finds a link left over from an earlier run.
+		m.tunnel.destroy()
+	}
+
 	nl := m.getNetlinkOps()
 	link, err := nl.LinkByName(m.iFaceName)
 	if err != nil {
@@ -347,6 +378,9 @@ func (m *Manager) cleanupExistingInterface() error {
 	}
 
 	if err := nl.LinkDel(link); err != nil {
+		if errors.Is(err, syscall.ENODEV) {
+			return nil // removed between the lookup and the delete
+		}
 		return fmt.Errorf("link delete: %w", wrapPermissionDeniedError("deleting wireguard interface", err))
 	}
 
